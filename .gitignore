@@ -1,0 +1,23 @@
+# Python cache və kompiyasiya faylları
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyCharm konfiqurasiya qovluğu
+.idea/
+
+# Virtual mühit (Virtual Environment)
+venv/
+env/
+ENV/
+.venv/
+
+# VS Code istifadə edirsənsə (opsional)
+.vscode/
+
+# Ətraf mühit dəyişənləri (Məxfilik üçün)
+.env
+
+# Log və verilənlər bazası faylları
+*.log
+*.sqlite3
