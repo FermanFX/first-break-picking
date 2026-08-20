@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+from torch.utils.data import Subset
 from tqdm import tqdm
 
 from src.data_loader import create_dataloader
@@ -11,23 +12,34 @@ from src.loss import FirstBreakLoss
 from src.model import FirstBreakGRU
 
 
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
 MANIFEST_PATH = Path(
     "data/processed/shot_manifest_split.csv"
 )
 
 CHECKPOINT_DIR = Path(
-    "data/processed/checkpoints/brunswick"
+    "data/processed/checkpoints"
 )
 
 RESULT_DIR = Path(
-    "data/processed/training/brunswick"
+    "data/processed/training"
 )
 
 SEED = 42
+
+# Train only one asset for the first experiment.
 ASSET = "Brunswick"
+
+# Limit the number of traces.
+MAX_TRAIN_SAMPLES = 20_000
+MAX_VAL_SAMPLES = 5_000
 
 BATCH_SIZE = 64
 EPOCHS = 5
+
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
 
@@ -38,13 +50,56 @@ DEVICE = torch.device(
 )
 
 
+# =============================================================================
+# REPRODUCIBILITY
+# =============================================================================
+
 def set_seed(seed: int) -> None:
+    """Set random seeds for reproducibility."""
+
     np.random.seed(seed)
+
     torch.manual_seed(seed)
 
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+
+# =============================================================================
+# SUBSET CREATION
+# =============================================================================
+
+def limit_dataset(
+    dataset,
+    max_samples: int,
+    seed: int,
+):
+    """
+    Randomly select at most max_samples from a dataset.
+
+    The selection is reproducible because a fixed seed is used.
+    """
+
+    if max_samples >= len(dataset):
+        return dataset
+
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    indices = torch.randperm(
+        len(dataset),
+        generator=generator,
+    )[:max_samples].tolist()
+
+    return Subset(
+        dataset,
+        indices,
+    )
+
+
+# =============================================================================
+# TRAINING
+# =============================================================================
 
 def train_one_epoch(
     model: nn.Module,
@@ -53,6 +108,7 @@ def train_one_epoch(
     loss_fn: nn.Module,
     device: torch.device,
 ) -> float:
+    """Train model for one epoch."""
 
     model.train()
 
@@ -97,13 +153,13 @@ def train_one_epoch(
 
         optimizer.step()
 
-        batch_size = waveform.shape[0]
+        current_batch_size = waveform.shape[0]
 
         running_loss += (
-            loss.item() * batch_size
+            loss.item() * current_batch_size
         )
 
-        total_samples += batch_size
+        total_samples += current_batch_size
 
         progress.set_postfix(
             loss=f"{loss.item():.4f}"
@@ -112,6 +168,10 @@ def train_one_epoch(
     return running_loss / total_samples
 
 
+# =============================================================================
+# VALIDATION
+# =============================================================================
+
 @torch.no_grad()
 def validate(
     model: nn.Module,
@@ -119,6 +179,7 @@ def validate(
     loss_fn: nn.Module,
     device: torch.device,
 ) -> float:
+    """Evaluate validation loss."""
 
     model.eval()
 
@@ -150,13 +211,13 @@ def validate(
             first_break,
         )
 
-        batch_size = waveform.shape[0]
+        current_batch_size = waveform.shape[0]
 
         running_loss += (
-            loss.item() * batch_size
+            loss.item() * current_batch_size
         )
 
-        total_samples += batch_size
+        total_samples += current_batch_size
 
         progress.set_postfix(
             loss=f"{loss.item():.4f}"
@@ -164,6 +225,10 @@ def validate(
 
     return running_loss / total_samples
 
+
+# =============================================================================
+# CHECKPOINT
+# =============================================================================
 
 def save_checkpoint(
     model: nn.Module,
@@ -173,6 +238,7 @@ def save_checkpoint(
     val_loss: float,
     path: Path,
 ) -> None:
+    """Save model checkpoint."""
 
     path.parent.mkdir(
         parents=True,
@@ -192,18 +258,25 @@ def save_checkpoint(
     )
 
 
+# =============================================================================
+# MAIN
+# =============================================================================
+
 def main() -> None:
 
     print("=" * 80)
-    print("FIRST BREAK PICKING - BRUNSWICK GRU TRAINING")
+    print("FIRST BREAK PICKING - GRU TRAINING")
     print("=" * 80)
 
     print()
-    print(f"Device: {DEVICE}")
-    print(f"Dataset: {ASSET}")
-    print(f"Batch size: {BATCH_SIZE}")
-    print(f"Epochs: {EPOCHS}")
-    print(f"Learning rate: {LEARNING_RATE}")
+    print(f"Device:              {DEVICE}")
+    print(f"Asset:               {ASSET}")
+    print(f"Batch size:          {BATCH_SIZE}")
+    print(f"Epochs:              {EPOCHS}")
+    print(f"Learning rate:       {LEARNING_RATE}")
+    print(f"Max train samples:   {MAX_TRAIN_SAMPLES:,}")
+    print(f"Max validation:      {MAX_VAL_SAMPLES:,}")
+    print()
 
     set_seed(SEED)
 
@@ -217,12 +290,15 @@ def main() -> None:
         exist_ok=True,
     )
 
-    print()
+    # =========================================================================
+    # DATA
+    # =========================================================================
+
     print("=" * 80)
     print("LOADING DATA")
     print("=" * 80)
 
-    train_loader = create_dataloader(
+    train_loader_full = create_dataloader(
         manifest_path=MANIFEST_PATH,
         split="train",
         batch_size=BATCH_SIZE,
@@ -231,7 +307,7 @@ def main() -> None:
         assets=[ASSET],
     )
 
-    val_loader = create_dataloader(
+    val_loader_full = create_dataloader(
         manifest_path=MANIFEST_PATH,
         split="val",
         batch_size=BATCH_SIZE,
@@ -240,15 +316,76 @@ def main() -> None:
         assets=[ASSET],
     )
 
+    print()
     print(
-        f"Train samples: "
+        f"Full {ASSET} train samples: "
+        f"{len(train_loader_full.dataset):,}"
+    )
+
+    print(
+        f"Full {ASSET} validation samples: "
+        f"{len(val_loader_full.dataset):,}"
+    )
+
+    # -------------------------------------------------------------------------
+    # LIMIT DATASET
+    # -------------------------------------------------------------------------
+
+    train_dataset = limit_dataset(
+        train_loader_full.dataset,
+        MAX_TRAIN_SAMPLES,
+        seed=SEED,
+    )
+
+    val_dataset = limit_dataset(
+        val_loader_full.dataset,
+        MAX_VAL_SAMPLES,
+        seed=SEED + 1,
+    )
+
+    # Re-create DataLoaders with limited datasets.
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=NUM_WORKERS,
+        pin_memory=torch.cuda.is_available(),
+        collate_fn=train_loader_full.collate_fn,
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=NUM_WORKERS,
+        pin_memory=torch.cuda.is_available(),
+        collate_fn=val_loader_full.collate_fn,
+    )
+
+    print()
+    print(
+        f"Training samples used: "
         f"{len(train_loader.dataset):,}"
     )
 
     print(
-        f"Validation samples: "
+        f"Validation samples used: "
         f"{len(val_loader.dataset):,}"
     )
+
+    print(
+        f"Training batches: "
+        f"{len(train_loader):,}"
+    )
+
+    print(
+        f"Validation batches: "
+        f"{len(val_loader):,}"
+    )
+
+    # =========================================================================
+    # MODEL
+    # =========================================================================
 
     print()
     print("=" * 80)
@@ -270,17 +407,24 @@ def main() -> None:
 
     print(model)
 
+    print()
     print(
-        f"Total parameters: "
-        f"{total_params:,}"
+        f"Total parameters:     {total_params:,}"
     )
 
     print(
-        f"Trainable parameters: "
-        f"{trainable_params:,}"
+        f"Trainable parameters: {trainable_params:,}"
     )
+
+    # =========================================================================
+    # LOSS
+    # =========================================================================
 
     loss_fn = FirstBreakLoss()
+
+    # =========================================================================
+    # OPTIMIZER
+    # =========================================================================
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -295,6 +439,10 @@ def main() -> None:
         patience=2,
     )
 
+    # =========================================================================
+    # TRAINING
+    # =========================================================================
+
     best_val_loss = float("inf")
 
     history = []
@@ -304,12 +452,19 @@ def main() -> None:
     print("TRAINING")
     print("=" * 80)
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(
+        1,
+        EPOCHS + 1,
+    ):
 
         print()
         print(
             f"Epoch {epoch}/{EPOCHS}"
         )
+
+        # ---------------------------------------------------------------------
+        # TRAIN
+        # ---------------------------------------------------------------------
 
         train_loss = train_one_epoch(
             model=model,
@@ -319,6 +474,10 @@ def main() -> None:
             device=DEVICE,
         )
 
+        # ---------------------------------------------------------------------
+        # VALIDATION
+        # ---------------------------------------------------------------------
+
         val_loss = validate(
             model=model,
             loader=val_loader,
@@ -326,9 +485,17 @@ def main() -> None:
             device=DEVICE,
         )
 
+        # ---------------------------------------------------------------------
+        # SCHEDULER
+        # ---------------------------------------------------------------------
+
         scheduler.step(val_loss)
 
         current_lr = optimizer.param_groups[0]["lr"]
+
+        # ---------------------------------------------------------------------
+        # HISTORY
+        # ---------------------------------------------------------------------
 
         history.append(
             {
@@ -352,14 +519,22 @@ def main() -> None:
             f"LR:         {current_lr:.2e}"
         )
 
+        # ---------------------------------------------------------------------
+        # LAST CHECKPOINT
+        # ---------------------------------------------------------------------
+
         save_checkpoint(
             model=model,
             optimizer=optimizer,
             epoch=epoch,
             train_loss=train_loss,
             val_loss=val_loss,
-            path=CHECKPOINT_DIR / "last.pt",
+            path=CHECKPOINT_DIR / "brunswick_last.pt",
         )
+
+        # ---------------------------------------------------------------------
+        # BEST CHECKPOINT
+        # ---------------------------------------------------------------------
 
         if val_loss < best_val_loss:
 
@@ -371,19 +546,31 @@ def main() -> None:
                 epoch=epoch,
                 train_loss=train_loss,
                 val_loss=val_loss,
-                path=CHECKPOINT_DIR / "best.pt",
+                path=CHECKPOINT_DIR / "brunswick_best.pt",
             )
 
-            print("New best model saved.")
+            print(
+                "✓ New best model saved."
+            )
+
+    # =========================================================================
+    # SAVE HISTORY
+    # =========================================================================
 
     history_path = (
-        RESULT_DIR / "training_history.csv"
+        RESULT_DIR / "brunswick_training_history.csv"
     )
 
-    pd.DataFrame(history).to_csv(
+    history_df = pd.DataFrame(history)
+
+    history_df.to_csv(
         history_path,
         index=False,
     )
+
+    # =========================================================================
+    # FINISHED
+    # =========================================================================
 
     print()
     print("=" * 80)
@@ -391,17 +578,34 @@ def main() -> None:
     print("=" * 80)
 
     print(
+        f"Asset:               {ASSET}"
+    )
+
+    print(
+        f"Train samples:       {len(train_loader.dataset):,}"
+    )
+
+    print(
+        f"Validation samples:  {len(val_loader.dataset):,}"
+    )
+
+    print(
         f"Best validation loss: "
         f"{best_val_loss:.6f}"
     )
 
     print(
-        f"Best checkpoint: "
-        f"{CHECKPOINT_DIR / 'best.pt'}"
+        f"Best checkpoint:     "
+        f"{CHECKPOINT_DIR / 'brunswick_best.pt'}"
     )
 
     print(
-        f"History: "
+        f"Last checkpoint:     "
+        f"{CHECKPOINT_DIR / 'brunswick_last.pt'}"
+    )
+
+    print(
+        f"Training history:    "
         f"{history_path}"
     )
 
