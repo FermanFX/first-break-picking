@@ -23,13 +23,13 @@ RESULT_DIR = Path(
 
 SEED = 42
 
-BATCH_SIZE = 512
+BATCH_SIZE = 64
 EPOCHS = 5
 
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
 
-NUM_WORKERS = 4
+NUM_WORKERS = 2
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
