@@ -6,9 +6,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-
-RAW_DIR = Path("data/raw")
-MANIFEST_PATH = Path("data/processed/shot_manifest_split.csv")
+RAW_DIR = Path("/kaggle/input/datasets/frmanxankiiyev/first-break-picking-data")
+MANIFEST_PATH = Path("/kaggle/working/first-break-picking/data/processed/shot_manifest_split.csv")
 
 
 ASSETS = {
