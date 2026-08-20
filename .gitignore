@@ -18,6 +18,11 @@ ENV/
 # Ətraf mühit dəyişənləri (Məxfilik üçün)
 .env
 
-# Log və verilənlər bazası faylları
+# Log faylları
 *.log
+
+# Verilənlər bazası və böyük data faylları
 *.sqlite3
+*.hdf5
+*.hdf
+*.xz
