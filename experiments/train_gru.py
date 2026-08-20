@@ -4,11 +4,6 @@ import numpy as np
 import torch
 from torch import nn
 from tqdm import tqdm
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
-
 from src.data_loader import create_dataloader
 from src.loss import FirstBreakLoss
 from src.model import FirstBreakGRU
