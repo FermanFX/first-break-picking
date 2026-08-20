@@ -29,7 +29,7 @@ EPOCHS = 5
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
 
-NUM_WORKERS = 0
+NUM_WORKERS = 4
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
