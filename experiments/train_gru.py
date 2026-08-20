@@ -1,9 +1,11 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 from torch import nn
 from tqdm import tqdm
+
 from src.data_loader import create_dataloader
 from src.loss import FirstBreakLoss
 from src.model import FirstBreakGRU
@@ -14,22 +16,22 @@ MANIFEST_PATH = Path(
 )
 
 CHECKPOINT_DIR = Path(
-    "data/processed/checkpoints"
+    "data/processed/checkpoints/brunswick"
 )
 
 RESULT_DIR = Path(
-    "data/processed/training"
+    "data/processed/training/brunswick"
 )
 
 SEED = 42
+ASSET = "Brunswick"
 
 BATCH_SIZE = 64
 EPOCHS = 5
-
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
 
-NUM_WORKERS = 2
+NUM_WORKERS = 0
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
@@ -37,10 +39,7 @@ DEVICE = torch.device(
 
 
 def set_seed(seed: int) -> None:
-    """Set random seeds for reproducibility."""
-
     np.random.seed(seed)
-
     torch.manual_seed(seed)
 
     if torch.cuda.is_available():
@@ -54,7 +53,6 @@ def train_one_epoch(
     loss_fn: nn.Module,
     device: torch.device,
 ) -> float:
-    """Train model for one epoch."""
 
     model.train()
 
@@ -121,7 +119,6 @@ def validate(
     loss_fn: nn.Module,
     device: torch.device,
 ) -> float:
-    """Evaluate validation loss."""
 
     model.eval()
 
@@ -176,7 +173,6 @@ def save_checkpoint(
     val_loss: float,
     path: Path,
 ) -> None:
-    """Save model checkpoint."""
 
     path.parent.mkdir(
         parents=True,
@@ -190,6 +186,7 @@ def save_checkpoint(
             "optimizer_state_dict": optimizer.state_dict(),
             "train_loss": train_loss,
             "val_loss": val_loss,
+            "asset": ASSET,
         },
         path,
     )
@@ -198,15 +195,15 @@ def save_checkpoint(
 def main() -> None:
 
     print("=" * 80)
-    print("FIRST BREAK PICKING - GRU TRAINING")
+    print("FIRST BREAK PICKING - BRUNSWICK GRU TRAINING")
     print("=" * 80)
 
     print()
     print(f"Device: {DEVICE}")
+    print(f"Dataset: {ASSET}")
     print(f"Batch size: {BATCH_SIZE}")
     print(f"Epochs: {EPOCHS}")
     print(f"Learning rate: {LEARNING_RATE}")
-    print()
 
     set_seed(SEED)
 
@@ -220,10 +217,7 @@ def main() -> None:
         exist_ok=True,
     )
 
-    # ------------------------------------------------------------------
-    # DATA
-    # ------------------------------------------------------------------
-
+    print()
     print("=" * 80)
     print("LOADING DATA")
     print("=" * 80)
@@ -234,6 +228,7 @@ def main() -> None:
         batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=NUM_WORKERS,
+        assets=[ASSET],
     )
 
     val_loader = create_dataloader(
@@ -242,20 +237,18 @@ def main() -> None:
         batch_size=BATCH_SIZE,
         shuffle=False,
         num_workers=NUM_WORKERS,
+        assets=[ASSET],
     )
 
     print(
-        f"Train samples: {len(train_loader.dataset):,}"
+        f"Train samples: "
+        f"{len(train_loader.dataset):,}"
     )
 
     print(
         f"Validation samples: "
         f"{len(val_loader.dataset):,}"
     )
-
-    # ------------------------------------------------------------------
-    # MODEL
-    # ------------------------------------------------------------------
 
     print()
     print("=" * 80)
@@ -277,9 +270,9 @@ def main() -> None:
 
     print(model)
 
-    print()
     print(
-        f"Total parameters: {total_params:,}"
+        f"Total parameters: "
+        f"{total_params:,}"
     )
 
     print(
@@ -287,15 +280,7 @@ def main() -> None:
         f"{trainable_params:,}"
     )
 
-    # ------------------------------------------------------------------
-    # LOSS
-    # ------------------------------------------------------------------
-
     loss_fn = FirstBreakLoss()
-
-    # ------------------------------------------------------------------
-    # OPTIMIZER
-    # ------------------------------------------------------------------
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -309,10 +294,6 @@ def main() -> None:
         factor=0.5,
         patience=2,
     )
-
-    # ------------------------------------------------------------------
-    # TRAINING
-    # ------------------------------------------------------------------
 
     best_val_loss = float("inf")
 
@@ -347,9 +328,7 @@ def main() -> None:
 
         scheduler.step(val_loss)
 
-        current_lr = optimizer.param_groups[0][
-            "lr"
-        ]
+        current_lr = optimizer.param_groups[0]["lr"]
 
         history.append(
             {
@@ -373,10 +352,6 @@ def main() -> None:
             f"LR:         {current_lr:.2e}"
         )
 
-        # --------------------------------------------------------------
-        # LAST CHECKPOINT
-        # --------------------------------------------------------------
-
         save_checkpoint(
             model=model,
             optimizer=optimizer,
@@ -385,10 +360,6 @@ def main() -> None:
             val_loss=val_loss,
             path=CHECKPOINT_DIR / "last.pt",
         )
-
-        # --------------------------------------------------------------
-        # BEST CHECKPOINT
-        # --------------------------------------------------------------
 
         if val_loss < best_val_loss:
 
@@ -403,23 +374,13 @@ def main() -> None:
                 path=CHECKPOINT_DIR / "best.pt",
             )
 
-            print(
-                "✓ New best model saved."
-            )
-
-    # ------------------------------------------------------------------
-    # SAVE HISTORY
-    # ------------------------------------------------------------------
+            print("New best model saved.")
 
     history_path = (
         RESULT_DIR / "training_history.csv"
     )
 
-    import pandas as pd
-
-    history_df = pd.DataFrame(history)
-
-    history_df.to_csv(
+    pd.DataFrame(history).to_csv(
         history_path,
         index=False,
     )
@@ -437,11 +398,6 @@ def main() -> None:
     print(
         f"Best checkpoint: "
         f"{CHECKPOINT_DIR / 'best.pt'}"
-    )
-
-    print(
-        f"Last checkpoint: "
-        f"{CHECKPOINT_DIR / 'last.pt'}"
     )
 
     print(
